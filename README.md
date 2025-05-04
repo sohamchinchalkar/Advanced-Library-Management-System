@@ -6,5 +6,4 @@ Developed custom SQL queries to enable real-time book search, automated reportin
 
 Implemented dynamic pricing for overdue fines and late fees based on demand and book availability, encouraging timely returns and better resource utilization.
 
-Integrated a personalized recommendation engine on the user portal, leveraging users’ past borrowing history and preferences to suggest relevant books and improve engagement.
-
+Implemented a personalized book recommendation system using the K-Nearest Neighbors (KNN) algorithm, analyzing user borrowing history to suggest relevant books on the user portal and enhance engagement.
