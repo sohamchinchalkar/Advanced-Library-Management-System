@@ -1,119 +1,60 @@
-import pandas as pd 
-import numpy as np
+import pandas as pd
 from scipy.sparse import csr_matrix
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.datasets import load_svmlight_file
-from joblib import Parallel, delayed
-import heapq
-from collections import defaultdict
-from tqdm import tqdm
+import sqlite3
 
-# File Paths
-ratings_path = "trans.libsvm"  
-user_mapping_path = "user_mapping.csv"
-isbn_mapping_path = "book_mapping.csv"
+# Connect to the renamed SQLite database
+conn = sqlite3.connect("Group27_LibraryManagementSystem.db")  # Use full path if needed
+cursor = conn.cursor()
 
-# Step 1: Load mappings
-print("Step 1: Loading Ratings.csv for mappings...")
-user_mapping_df = pd.read_csv(user_mapping_path)
-isbn_mapping_df = pd.read_csv(isbn_mapping_path)
+# Step 1: Load user-book-rating data from the database
+ratings_df = pd.read_sql_query("""
+    SELECT user_id, book_id, rating FROM borrowed
+    WHERE rating IS NOT NULL
+""", conn)
 
-print(f"Found {len(user_mapping_df)} users and {len(isbn_mapping_df)} books.")
+# Step 2: Create user-book matrix
+user_ids = ratings_df['user_id'].astype('category')
+book_ids = ratings_df['book_id'].astype('category')
 
-# Step 2: Load Book Titles
-print("Step 2: Preparing Book Titles...")
-ordered_isbn_list = isbn_mapping_df.sort_values('Mapped_Book_ID')['Original_ISBN'].tolist()
+X = csr_matrix((ratings_df['rating'],
+                (user_ids.cat.codes, book_ids.cat.codes)))
 
-print(f"Loaded {len(ordered_isbn_list)} book titles.")
+user_mapping = dict(enumerate(user_ids.cat.categories))
+book_mapping = dict(enumerate(book_ids.cat.categories))
 
-# Step 3: Load LIBSVM Sparse Matrix
-print("Step 3: Loading LIBSVM formatted ratings...")
-X, _ = load_svmlight_file(ratings_path)
+# Step 3: Compute similarity and recommendations
+similarity = cosine_similarity(X)
+recommendations = []
 
-num_users, num_books = X.shape
-print(f"Sparse matrix shape: {X.shape}, non-zero entries: {X.nnz}")
+for user_index in range(X.shape[0]):
+    sim_users = similarity[user_index]
+    weighted_ratings = sim_users @ X
+    normalization = sim_users.sum()
+    scores = weighted_ratings / normalization if normalization > 0 else weighted_ratings
+    recommendations.append(scores)
 
-print("Step 4: Computing user-user similarity...")
-user_similarity = cosine_similarity(X)
-print("User-user similarity computed.")
+# Step 4: Create DataFrame for recommendations
+recommendations_df = pd.DataFrame(recommendations)
+recommendations_df['user_id'] = recommendations_df.index.map(user_mapping)
 
-# Quick lookup: books read by each user
-X_coo = X.tocoo()
-ratings_df = pd.DataFrame({
-    'User_ID': X_coo.row,
-    'Book_ID': X_coo.col,
-    'Rating': X_coo.data
-})
+# Step 5: Melt to user-book-score format
+melted_df = recommendations_df.drop(columns=['user_id']).copy()
+melted_df.columns = [book_mapping[i] for i in melted_df.columns]
+melted_df['user_id'] = recommendations_df['user_id']
+final_df = melted_df.melt(id_vars='user_id', var_name='book_id', value_name='score')
 
-user_rated_books = ratings_df.groupby('User_ID')['Book_ID'].apply(set).to_dict()
-user_book_rating = ratings_df.set_index(['User_ID', 'Book_ID'])['Rating'].to_dict()
+# Step 6: Remove books already rated by users
+rated_pairs = set(zip(ratings_df.user_id, ratings_df.book_id))
+final_df = final_df[~final_df.set_index(['user_id', 'book_id']).index.isin(rated_pairs)]
 
-# Step 5: Recommendation Function
-def recommend_books_for_user(u, k=10):
-    if u not in user_rated_books:
-        return []
+# Step 7: Get top 5 recommendations per user
+top_recommendations = final_df.groupby('user_id').apply(
+    lambda x: x.sort_values('score', ascending=False).head(5)
+).reset_index(drop=True)
 
-    similarities = user_similarity[u]
-    similar_users = np.argsort(-similarities)[1:k+1]
+# Step 8: Save recommendations back to the SQL database
+top_recommendations.to_sql("recommendations", conn, if_exists="replace", index=False)
 
-    BK = set()
-    for v in similar_users:
-        BK.update(user_rated_books.get(v, set()))
-
-    already_read = user_rated_books[u]
-    candidate_books = BK - already_read
-
-    book_scores = {}
-    for b in candidate_books:
-        numerator = 0
-        denominator = 0
-        for v in similar_users:
-            rating = user_book_rating.get((v, b), None)
-            if rating is not None:
-                sim_score = similarities[v]
-                numerator += sim_score * rating
-                denominator += sim_score
-        if denominator != 0:
-            book_scores[b] = numerator / denominator
-
-    top_5 = heapq.nlargest(5, book_scores.items(), key=lambda x: x[1])
-
-    recommendations = []
-    for book_id, score in top_5:
-        user_id = f"User{u}"
-        mapped_book_id = f"Book{book_id}"
-        book_title = ordered_isbn_list[book_id] if book_id < len(ordered_isbn_list) else 'Unknown'
-
-        recommendations.append({
-            "User_ID": user_id,
-            "Book_ID": mapped_book_id,
-            "Book_Title": book_title,
-            "Recommendation_Score": score
-        })
-
-    return recommendations
-
-# Step 6: Generate Recommendations
-print("Step 5: Generating recommendations...")
-try:
-    all_recommendations = Parallel(n_jobs=-1, backend='threading')(
-        delayed(recommend_books_for_user)(u)
-        for u in tqdm(range(num_users), desc='Generating Recommendations')
-    )
-except Exception as e:
-    print(f"Error during parallel processing: {e}")
-    all_recommendations = []
-
-# Flatten the list
-flattened_recommendations = [rec for sublist in all_recommendations if sublist for rec in sublist]
-
-print(f"{len(flattened_recommendations)} recommendations generated.")
-
-# Step 7: Save Results
-if flattened_recommendations:
-    recommendations_df = pd.DataFrame(flattened_recommendations)
-    recommendations_df.to_csv('final_book_recommendations.csv', index=False)
-    print("Final recommendations saved to final_book_recommendations.csv")
-else:
-    print("No recommendations generated.")
-
+# Close connection
+conn.close()
