@@ -1,3 +1,5 @@
+Dataset: https://www.kaggle.com/datasets/somnambwl/bookcrossing-dataset?resource=download&select=Books.csv
+
 Designed and implemented a comprehensive Library Management System using MySQL, optimizing database performance and ensuring seamless book tracking, user management, and borrowing/returning functionalities.
 
 Applied advanced database management techniques to structure relational data efficiently, enforcing constraints and indexing to accelerate query performance and maintain data integrity.
