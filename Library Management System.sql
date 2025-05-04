@@ -1,10 +1,5 @@
 /*
-** Author 1: Soham Chinchalkar - ID: 1233402588
-** Author 2: Shreya Jagtap - ID: 1232139885
-** Course: IFT530: Advanced Database Management System
-** SQL Server Version: Microsoft Azure SQL Edge Developer (RTM)
-** Date Created : 04/30/2025
-** Description Assignment: FINAL PROJECT - Library Management System
+** Author: Soham Chinchalkar
 */
 
 SELECT GETDATE();
